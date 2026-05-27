@@ -118,9 +118,13 @@ async fn forward_event(
     event: &llm_mux_core::ir::IrStreamEvent,
 ) {
     match inbound.encode_stream_event(event) {
-        Ok(sse_str) => {
-            let event = sse_str_to_event(&sse_str);
-            if tx.send(event).await.is_err() {}
+        Ok(s) => {
+            let payload = if let Some(data) = s.strip_prefix("data: ") {
+                data.trim_end_matches('\n').to_string()
+            } else {
+                s
+            };
+            if tx.send(Ok(Event::default().data(payload))).await.is_err() {}
         }
         Err(e) => {
             error!("SSE encode error: {}", e);
