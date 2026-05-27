@@ -20,3 +20,5 @@ Thumbs.db
 docker-compose.override.yml
 
 .cache
+
+config.yaml
