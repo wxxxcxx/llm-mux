@@ -1,0 +1,31 @@
+[package]
+name = "llm-mux-gateway"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "llm-mux"
+path = "src/main.rs"
+
+[dependencies]
+llm-mux-core.workspace = true
+openai-codec.workspace = true
+anthropic-codec.workspace = true
+openai-responses-codec = { path = "../llm-mux-codecs/openai-responses" }
+axum.workspace = true
+tokio.workspace = true
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true
+reqwest.workspace = true
+futures = { version = "0.3", default-features = false, features = ["std"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+bytes = "1"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

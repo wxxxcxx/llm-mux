@@ -234,4 +234,18 @@ impl IrRequest {
     pub fn has_tools(&self) -> bool {
         !self.tools.is_empty()
     }
+
+    pub fn has_media(&self) -> bool {
+        fn block_has_media(block: &ContentBlock) -> bool {
+            matches!(
+                block.content_type,
+                crate::types::ContentType::Image | crate::types::ContentType::Document
+            )
+        }
+        fn blocks_have_media(blocks: &[ContentBlock]) -> bool {
+            blocks.iter().any(block_has_media)
+        }
+        blocks_have_media(&self.system_prompt)
+            || self.messages.iter().any(|m| blocks_have_media(&m.content))
+    }
 }

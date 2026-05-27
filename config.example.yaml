@@ -1,0 +1,50 @@
+# LLM Mux 配置文件示例
+# 复制为 config.yaml 并按需修改
+
+# 服务配置
+host: "127.0.0.1"
+port: 8080
+log_level: info
+drain_timeout_secs: 30
+
+# API Key 白名单（可选，不配置则不验证入站请求）
+# api_keys:
+#   - "sk-xxxxxxxx"
+
+# 上游 Provider 定义（集中配置后端凭证、连接信息和模型映射）
+providers:
+  openai:
+    protocol: openai-chat
+    base_url: "https://api.openai.com/v1"
+    api_key: "${OPENAI_API_KEY}"
+    # model_mapping:              # 可选：入站模型名 → 后端实际模型名
+    #   "*": "gpt-4o"
+
+  anthropic:
+    protocol: anthropic
+    base_url: "https://api.anthropic.com"
+    api_key: "${ANTHROPIC_API_KEY}"
+    model_mapping:
+      "gpt-4o": "claude-sonnet-4-6"
+      "gpt-4o-mini": "claude-haiku-4-6"
+      "*": "claude-sonnet-4-6"
+
+  # 可选：额外的 Provider（如 Azure）
+  # azure:
+  #   protocol: openai-chat
+  #   base_url: "https://your-resource.openai.azure.com"
+  #   api_key: "${AZURE_API_KEY}"
+  #   headers:
+  #     api-key: "${AZURE_API_KEY}"
+
+# 路由规则（从上到下首个命中生效；兜底规则必须放在最后）
+routes:
+  # Claude 模型走 Anthropic 后端
+  - models:
+      - "claude-*"
+    provider: anthropic
+
+  # 兜底：其余所有请求走 OpenAI
+  - models:
+      - "*"
+    provider: openai

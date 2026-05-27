@@ -101,13 +101,16 @@ fn test_decode_assistant_with_tool_calls() {
     assert_eq!(tu.name, "get_weather");
     // tool result
     assert_eq!(ir.messages[2].role, Role::Tool);
-    assert_eq!(ir.messages[2].content[0].content_type, ContentType::ToolResult);
+    assert_eq!(
+        ir.messages[2].content[0].content_type,
+        ContentType::ToolResult
+    );
 }
 
 #[test]
 fn test_encode_basic_response() {
     use llm_mux_core::ir::{IrResponse, IrUsage};
-    use llm_mux_core::types::{TextContent};
+    use llm_mux_core::types::TextContent;
 
     let codec = ChatCompletionsCodec;
     let resp = IrResponse {
@@ -115,7 +118,9 @@ fn test_encode_basic_response() {
         model: Some("gpt-4o".into()),
         content: vec![llm_mux_core::types::ContentBlock {
             content_type: ContentType::Text,
-            text: Some(TextContent { text: "Hello!".into() }),
+            text: Some(TextContent {
+                text: "Hello!".into(),
+            }),
             ..Default::default()
         }],
         stop_reason: Some(StopReason::EndTurn),
@@ -145,7 +150,10 @@ fn test_decode_stream_chunk_text() {
 
     let event = codec.decode_stream_event(None, data).unwrap();
     assert_eq!(event.event_type, StreamEventType::Delta);
-    assert_eq!(event.delta.as_ref().unwrap().text.as_ref().unwrap().text, "Hello");
+    assert_eq!(
+        event.delta.as_ref().unwrap().text.as_ref().unwrap().text,
+        "Hello"
+    );
 }
 
 #[test]
@@ -161,8 +169,8 @@ fn test_decode_stream_chunk_finish() {
 #[test]
 fn test_encode_stream_delta() {
     use llm_mux_core::ir::IrStreamEvent;
-    use llm_mux_core::types::TextContent;
     use llm_mux_core::types::ContentBlock;
+    use llm_mux_core::types::TextContent;
 
     let codec = ChatCompletionsCodec;
     let event = IrStreamEvent {

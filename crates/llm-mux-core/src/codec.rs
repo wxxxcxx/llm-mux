@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::ir::{IrRequest, IrResponse, IrStreamEvent};
 use crate::types::Protocol;
@@ -8,12 +8,18 @@ use crate::types::Protocol;
 pub enum CodecError {
     #[error("failed to decode request: {0}")]
     Decode(String),
+    #[error("failed to decode response: {0}")]
+    DecodeResponse(String),
     #[error("failed to encode response: {0}")]
     Encode(String),
     #[error("unsupported protocol: {0:?}")]
     UnsupportedProtocol(Protocol),
     #[error("stream event error: {0}")]
     Stream(String),
+    #[error("authentication failed: {0}")]
+    Auth(String),
+    #[error("no route matched for model: {0}")]
+    RouteNotFound(String),
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
     #[error("JSON error: {0}")]
@@ -44,6 +50,9 @@ pub trait Codec: Send + Sync {
 
     /// Encode an IR stream event into an SSE data line.
     fn encode_stream_event(&self, event: &IrStreamEvent) -> Result<String, CodecError>;
+
+    /// Decode a raw response body into the unified IR.
+    fn decode_response(&self, body: &[u8]) -> Result<IrResponse, CodecError>;
 
     /// Known top-level fields for this protocol (used for merging unknown fields).
     fn known_fields(&self) -> &HashMap<String, bool>;
@@ -125,11 +134,7 @@ pub trait Authenticator: Send + Sync {
 pub trait Converter: Send + Sync {
     /// Transform the IR request for the target outbound protocol.
     /// Called after routing, before encoding.
-    fn convert_request(
-        &self,
-        request: &mut IrRequest,
-        target: &RouteResult,
-    );
+    fn convert_request(&self, request: &mut IrRequest, target: &RouteResult);
 
     /// Transform the IR response from the outbound protocol back to the original inbound protocol.
     fn convert_response(
@@ -168,5 +173,162 @@ impl Converter for NoopConverter {
         _source_protocol: Protocol,
         _target_protocol: Protocol,
     ) {
+    }
+}
+
+/// API Key based authenticator using a pre-configured key set.
+pub struct ConfigAuthenticator {
+    keys: HashSet<String>,
+}
+
+impl ConfigAuthenticator {
+    pub fn new(keys: Vec<String>) -> Self {
+        Self {
+            keys: keys.into_iter().collect(),
+        }
+    }
+}
+
+impl Authenticator for ConfigAuthenticator {
+    fn authenticate(&self, api_key: &str) -> Result<(), CodecError> {
+        if self.keys.is_empty() || self.keys.contains(api_key) {
+            Ok(())
+        } else {
+            Err(CodecError::Auth("invalid API key".into()))
+        }
+    }
+}
+
+/// Provider configuration with optional model mapping.
+#[derive(Debug, Clone)]
+pub struct ProviderConfig {
+    pub protocol: Protocol,
+    pub base_url: String,
+    pub api_key: String,
+    pub headers: HashMap<String, String>,
+    pub model_mapping: HashMap<String, String>,
+}
+
+/// Route rule with multi-condition matching (AND semantics).
+#[derive(Debug, Clone)]
+pub struct RouteRule {
+    pub models: Vec<String>,
+    pub protocol: Option<Protocol>,
+    pub stream: Option<bool>,
+    pub has_tools: Option<bool>,
+    pub has_media: Option<bool>,
+    pub provider: String,
+}
+
+/// A router that matches routes top-to-bottom with first-match-wins.
+pub struct ConfigurableRouter {
+    rules: Vec<RouteRule>,
+    providers: HashMap<String, ProviderConfig>,
+}
+
+impl ConfigurableRouter {
+    pub fn new(rules: Vec<RouteRule>, providers: HashMap<String, ProviderConfig>) -> Self {
+        Self { rules, providers }
+    }
+
+    fn wildcard_match(pattern: &str, value: &str) -> bool {
+        if pattern == "*" {
+            return true;
+        }
+        if !pattern.contains('*') && !pattern.contains('?') {
+            return pattern == value;
+        }
+        let mut pi = 0;
+        let mut vi = 0;
+        let pb = pattern.as_bytes();
+        let vb = value.as_bytes();
+        let mut star = None;
+        while vi < vb.len() {
+            if pi < pb.len() && (pb[pi] == b'*') {
+                star = Some(pi);
+                pi += 1;
+            } else if pi < pb.len() && (pb[pi] == b'?' || pb[pi] == vb[vi]) {
+                pi += 1;
+                vi += 1;
+            } else if let Some(s) = star {
+                pi = s + 1;
+                vi += 1;
+            } else {
+                return false;
+            }
+        }
+        while pi < pb.len() && pb[pi] == b'*' {
+            pi += 1;
+        }
+        pi == pb.len()
+    }
+}
+
+impl Router for ConfigurableRouter {
+    fn route(&self, info: &RouteInfo) -> Result<RouteResult, CodecError> {
+        for rule in &self.rules {
+            let model_match = rule
+                .models
+                .iter()
+                .any(|p| Self::wildcard_match(p, &info.model));
+            if !model_match {
+                continue;
+            }
+            if let Some(ref proto) = rule.protocol {
+                if *proto != info.inbound_protocol {
+                    continue;
+                }
+            }
+            if let Some(stream) = rule.stream {
+                if stream != info.stream {
+                    continue;
+                }
+            }
+            if let Some(has_tools) = rule.has_tools {
+                if has_tools != info.has_tools {
+                    continue;
+                }
+            }
+            if let Some(has_media) = rule.has_media {
+                if has_media != info.has_media {
+                    continue;
+                }
+            }
+
+            let provider = self.providers.get(&rule.provider).ok_or_else(|| {
+                CodecError::RouteNotFound(format!(
+                    "provider '{}' not found for model '{}'",
+                    rule.provider, info.model
+                ))
+            })?;
+
+            let mapped_model = provider
+                .model_mapping
+                .get(&info.model)
+                .or_else(|| {
+                    provider
+                        .model_mapping
+                        .iter()
+                        .filter(|(k, _)| Self::wildcard_match(k, &info.model))
+                        .max_by_key(|(k, _)| k.len())
+                        .map(|(_, v)| v)
+                })
+                .cloned()
+                .unwrap_or_else(|| info.model.clone());
+
+            return Ok(RouteResult {
+                protocol: provider.protocol,
+                base_url: provider.base_url.clone(),
+                api_key: provider.api_key.clone(),
+                model: mapped_model,
+                proxy_url: None,
+                headers: provider.headers.clone(),
+            });
+        }
+
+        Err(CodecError::RouteNotFound(format!(
+            "no route matched for model '{}'",
+            info.model
+        )))
     }
 }

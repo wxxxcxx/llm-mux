@@ -1,27 +1,23 @@
 <!--
 Sync Impact Report
 ==================
-Version change: [UNVERSIONED_TEMPLATE] → 1.0.0
+Version change: 1.0.0 → 1.1.0
 Initial population: Filled all placeholder tokens with project-specific values.
 
-Modified principles (all new):
-  - PRINCIPLE_1_NAME → I. Code Quality & Safety
-  - PRINCIPLE_2_NAME → II. Test-First Discipline
-  - PRINCIPLE_3_NAME → III. Cross-Protocol Fidelity
-  - PRINCIPLE_4_NAME → IV. Performance by Design
-  - PRINCIPLE_5_NAME → V. Trait-Driven Composability
+Previous amendments:
+  - 1.0.0 (2026-05-27): Initial ratification — 5 Core Principles, Technical Constraints, Development Workflow, Governance
+  - 1.1.0 (2026-05-27): Added "语言与本地化标准" section with expanded scope covering all AI-generated artifacts
 
-Added sections:
-  - Technical Constraints
-  - Development Workflow
+Added sections (1.1.0):
+  - 语言与本地化标准 (Language & Localization)
 
 Removed sections: None
 
 Templates requiring updates:
-  - .specify/templates/plan-template.md ✅ No changes needed (Constitution Check gate is generic)
-  - .specify/templates/spec-template.md ✅ No changes needed (generic structure)
-  - .specify/templates/tasks-template.md ✅ No changes needed (generic structure)
-  - .specify/templates/checklist-template.md ✅ No changes needed (generic structure)
+  - .specify/templates/plan-template.md ✅ No changes needed
+  - .specify/templates/spec-template.md ✅ No changes needed
+  - .specify/templates/tasks-template.md ✅ No changes needed
+  - .specify/templates/checklist-template.md ✅ No changes needed
 
 Follow-up TODOs: None
 -->
@@ -121,7 +117,23 @@ prevents core churn, and enables third-party codec contributions without touchin
 - **Dependencies**: All dependencies MUST be declared at workspace level in the root `Cargo.toml` under
   `[workspace.dependencies]`. Crates reference them via `workspace = true`.
 - **No unsafe code**: enforced by the workspace lint `unsafe_code = "forbid"`.
-- **HTTP server**: `axum` (to be integrated in `llm-mux-server`).
+- **HTTP server**: `axum` (to be integrated in `llm-mux-gateway`).
+
+## 语言与本地化标准 (Language & Localization)
+
+所有 AI 衍生工件及交互 MUST 统一使用**简体中文（Simplified Chinese）**。此规则覆盖但不限于以下输出：
+
+- **规范与设计文档**: `/speckit.specify` 生成的 `spec.md`、`/speckit.plan` 生成的 `plan.md`、`research.md`、`data-model.md`、`contracts/`、`quickstart.md`
+- **任务与清单**: `/speckit.tasks` 生成的 `tasks.md`、`/speckit.checklist` 生成的 `checklists/*.md`
+- **日常对话**: 所有 AI 与用户的交互对话
+- **代码注释**: 鼓励使用中文注释解释业务逻辑和设计意图（对外公开 API 文档可保留英文）
+
+**例外**:
+- 技术栈及架构中已固化的专有名词（如 Kubernetes, Broker, Thread Pool, trait, crate, workspace）可保留英文原文
+- 引用的外部英文文档、API 规范、错误消息原文不要求翻译
+- 代码标识符（变量名、函数名、类型名）遵循 Rust 惯例使用英文
+
+**合规检查**: 在 Constitution Check 阶段验证所有生成工件的语言一致性；发现非中文工件视为合规违规。
 
 ## Development Workflow
 
@@ -131,7 +143,7 @@ prevents core churn, and enables third-party codec contributions without touchin
   documentation builds without warnings.
 - **Commit Hygiene**: Commits SHOULD be atomic and well-described. Squash merge is preferred for feature
   branches.
-- **Feature Workflow**: Use `/speckit.specify` → `/speckit.plan` → `/speckit.tasks` → `/speckit.implement`
+- **Feature Workflow**: Use `/speckit.specify` → `/speckit.clarify` → `/speckit.plan` → `/speckit.tasks` → `/speckit.checklist` → `/speckit.analyze` → `/speckit.implement`
   for structured feature delivery. Constitution compliance is checked at the plan stage.
 
 ## Governance
@@ -154,9 +166,4 @@ or resolved before merge.
 
 **Guidance File**: `AGENTS.md` provides runtime guidance for AI-assisted development within this project.
 
-**Version**: 1.0.0 | **Ratified**: 2026-05-27 | **Last Amended**: 2026-05-27
-
-
-## 语言与本地化标准 (Language & Localization)
-- **Lingua Franca**: 本项目的所有 AI 衍生工件（包括不限于 `/` 生成的 `spec.md`、`/plan` 生成的 `plan.md`、`/tasks` 生成的任务列表以及日常对话）**必须统一使用简体中文（Simplified Chinese）**进行输出。
-- **专有名词约束**: 技术栈及架构中的专有名词（如 Kubernetes, Broker, Thread Pool）可保留英文，但整体语法、描述和验收标准必须为中文。
+**Version**: 1.1.0 | **Ratified**: 2026-05-27 | **Last Amended**: 2026-05-27

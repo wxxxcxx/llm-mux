@@ -53,10 +53,7 @@ fn test_decode_with_tools() {
     assert!(ir.has_tools());
     assert_eq!(ir.tools.len(), 1);
     assert_eq!(ir.tools[0].name, "get_weather");
-    assert_eq!(
-        ir.tools[0].parameters.as_ref().unwrap()["type"],
-        "object"
-    );
+    assert_eq!(ir.tools[0].parameters.as_ref().unwrap()["type"], "object");
     assert!(ir.tool_choice.is_some());
     assert_eq!(ir.tool_choice.as_ref().unwrap().choice_type, "auto");
 }
@@ -106,10 +103,7 @@ fn test_decode_assistant_with_tool_use() {
         ir.messages[1].content[0].text.as_ref().unwrap().text,
         "Let me check."
     );
-    assert_eq!(
-        ir.messages[1].content[1].content_type,
-        ContentType::ToolUse
-    );
+    assert_eq!(ir.messages[1].content[1].content_type, ContentType::ToolUse);
     let tu = ir.messages[1].content[1].tool_use.as_ref().unwrap();
     assert_eq!(tu.name, "get_weather");
     // tool result
@@ -227,7 +221,8 @@ fn test_decode_stream_message_start() {
 #[test]
 fn test_decode_stream_text_delta() {
     let codec = MessagesCodec;
-    let data = r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}"#;
+    let data =
+        r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}"#;
 
     let event = codec.decode_stream_event(None, data).unwrap();
     assert_eq!(event.event_type, StreamEventType::Delta);
@@ -277,8 +272,8 @@ fn test_encode_stream_start() {
 #[test]
 fn test_encode_stream_text_delta() {
     use llm_mux_core::ir::IrStreamEvent;
-    use llm_mux_core::types::TextContent;
     use llm_mux_core::types::ContentBlock;
+    use llm_mux_core::types::TextContent;
 
     let codec = MessagesCodec;
     let event = IrStreamEvent {

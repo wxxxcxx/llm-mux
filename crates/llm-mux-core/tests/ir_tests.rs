@@ -36,11 +36,7 @@ mod tests {
         assert_eq!(decoded.messages.len(), 1);
         assert_eq!(decoded.messages[0].role, Role::User);
         assert_eq!(
-            decoded.messages[0].content[0]
-                .text
-                .as_ref()
-                .unwrap()
-                .text,
+            decoded.messages[0].content[0].text.as_ref().unwrap().text,
             "Hello"
         );
     }

@@ -20,24 +20,50 @@ impl Codec for MessagesCodec {
     }
 
     fn known_fields(&self) -> &HashMap<String, bool> {
-        static FIELDS: std::sync::LazyLock<HashMap<String, bool>> = std::sync::LazyLock::new(|| {
-            let mut m = HashMap::new();
-            m.insert("model".into(), true);
-            m.insert("messages".into(), true);
-            m.insert("system".into(), true);
-            m.insert("max_tokens".into(), true);
-            m.insert("stop_sequences".into(), true);
-            m.insert("stream".into(), true);
-            m.insert("temperature".into(), true);
-            m.insert("top_p".into(), true);
-            m.insert("top_k".into(), true);
-            m.insert("tools".into(), true);
-            m.insert("tool_choice".into(), true);
-            m.insert("thinking".into(), true);
-            m.insert("metadata".into(), true);
-            m
-        });
+        static FIELDS: std::sync::LazyLock<HashMap<String, bool>> =
+            std::sync::LazyLock::new(|| {
+                let mut m = HashMap::new();
+                m.insert("model".into(), true);
+                m.insert("messages".into(), true);
+                m.insert("system".into(), true);
+                m.insert("max_tokens".into(), true);
+                m.insert("stop_sequences".into(), true);
+                m.insert("stream".into(), true);
+                m.insert("temperature".into(), true);
+                m.insert("top_p".into(), true);
+                m.insert("top_k".into(), true);
+                m.insert("tools".into(), true);
+                m.insert("tool_choice".into(), true);
+                m.insert("thinking".into(), true);
+                m.insert("metadata".into(), true);
+                m
+            });
         &FIELDS
+    }
+
+    fn decode_response(&self, body: &[u8]) -> Result<IrResponse, CodecError> {
+        let resp: m::MessagesResponse = serde_json::from_slice(body)?;
+        let content: Vec<IrBlock> = resp
+            .content
+            .into_iter()
+            .map(|b| m_block_to_ir(&b))
+            .collect();
+        let stop_reason = resp.stop_reason.as_deref().map(|s| match s {
+            "end_turn" => StopReason::EndTurn,
+            "max_tokens" => StopReason::MaxTokens,
+            "tool_use" => StopReason::ToolUse,
+            "stop_sequence" => StopReason::StopSequence,
+            _ => StopReason::Other(s.to_string()),
+        });
+        Ok(IrResponse {
+            id: Some(resp.id),
+            model: Some(resp.model),
+            content,
+            stop_reason,
+            stop_sequence: resp.stop_sequence,
+            usage: m_usage_to_ir(&resp.usage),
+            provider_extensions: HashMap::new(),
+        })
     }
 
     fn decode_request(&self, body: &[u8]) -> Result<IrRequest, CodecError> {
@@ -57,9 +83,7 @@ impl Codec for MessagesCodec {
                 m::SystemPrompt::Text(text) => {
                     ir.system_prompt.push(IrBlock {
                         content_type: ContentType::Text,
-                        text: Some(TextContent {
-                            text: text.clone(),
-                        }),
+                        text: Some(TextContent { text: text.clone() }),
                         ..Default::default()
                     });
                 }
@@ -88,6 +112,20 @@ impl Codec for MessagesCodec {
                 role,
                 content: blocks,
             });
+        }
+
+        // Provider extensions from the `extra` flattened fields
+        ir.provider_extensions = req.extra.clone().into_iter().collect();
+
+        // Capture unknown top-level fields from the raw JSON body
+        if let Ok(raw) = serde_json::from_slice::<serde_json::Value>(body) {
+            if let Some(obj) = raw.as_object() {
+                for key in obj.keys() {
+                    if !self.known_fields().contains_key(key.as_str()) {
+                        ir.raw_extra.insert(key.clone(), obj[key].clone());
+                    }
+                }
+            }
         }
 
         if let Some(tools) = &req.tools {
@@ -124,18 +162,23 @@ impl Codec for MessagesCodec {
         let system = if request.system_prompt.is_empty() {
             None
         } else {
-            let texts: Vec<String> = request.system_prompt.iter()
+            let texts: Vec<String> = request
+                .system_prompt
+                .iter()
                 .filter_map(|b| b.text.as_ref().map(|t| t.text.clone()))
                 .collect();
             if texts.len() == 1 {
                 Some(m::SystemPrompt::Text(texts.into_iter().next().unwrap()))
             } else {
                 Some(m::SystemPrompt::Blocks(
-                    texts.into_iter().map(|t| m::SystemTextBlock {
-                        block_type: "text".into(),
-                        text: t,
-                        cache_control: None,
-                    }).collect(),
+                    texts
+                        .into_iter()
+                        .map(|t| m::SystemTextBlock {
+                            block_type: "text".into(),
+                            text: t,
+                            cache_control: None,
+                        })
+                        .collect(),
                 ))
             }
         };
@@ -203,22 +246,37 @@ impl Codec for MessagesCodec {
         let tools = if request.tools.is_empty() {
             None
         } else {
-            Some(request.tools.iter().map(|t| m::Tool {
-                name: t.name.clone(),
-                description: t.description.clone(),
-                input_schema: t.parameters.clone().unwrap_or(serde_json::json!({"type": "object"})),
-            }).collect())
+            Some(
+                request
+                    .tools
+                    .iter()
+                    .map(|t| m::Tool {
+                        name: t.name.clone(),
+                        description: t.description.clone(),
+                        input_schema: t
+                            .parameters
+                            .clone()
+                            .unwrap_or(serde_json::json!({"type": "object"})),
+                    })
+                    .collect(),
+            )
         };
 
-        let tool_choice = request.tool_choice.as_ref().map(|tc| match tc.choice_type.as_str() {
-            "auto" | "any" | "none" => serde_json::json!(tc.choice_type),
-            _ => {
-                let mut obj = serde_json::Map::new();
-                obj.insert("type".into(), serde_json::json!("tool"));
-                obj.insert("name".into(), serde_json::json!(tc.tool_name.clone().unwrap_or_default()));
-                serde_json::Value::Object(obj)
-            }
-        });
+        let tool_choice = request
+            .tool_choice
+            .as_ref()
+            .map(|tc| match tc.choice_type.as_str() {
+                "auto" | "any" | "none" => serde_json::json!(tc.choice_type),
+                _ => {
+                    let mut obj = serde_json::Map::new();
+                    obj.insert("type".into(), serde_json::json!("tool"));
+                    obj.insert(
+                        "name".into(),
+                        serde_json::json!(tc.tool_name.clone().unwrap_or_default()),
+                    );
+                    serde_json::Value::Object(obj)
+                }
+            });
 
         let thinking = request.thinking.as_ref().map(|tc| m::ThinkingConfig {
             thinking_type: tc.mode.clone().unwrap_or_else(|| "enabled".into()),
@@ -230,7 +288,11 @@ impl Codec for MessagesCodec {
             messages,
             system,
             max_tokens: request.max_tokens,
-            stop_sequences: if request.stop_sequences.is_empty() { None } else { Some(request.stop_sequences.clone()) },
+            stop_sequences: if request.stop_sequences.is_empty() {
+                None
+            } else {
+                Some(request.stop_sequences.clone())
+            },
             stream: request.stream,
             temperature: request.temperature,
             top_p: request.top_p,
@@ -240,7 +302,12 @@ impl Codec for MessagesCodec {
             tool_choice,
             thinking,
             service_tier: None,
-            extra: request.provider_extensions.clone().into_iter().map(|(k, v)| (k, v.clone())).collect(),
+            extra: request
+                .provider_extensions
+                .clone()
+                .into_iter()
+                .map(|(k, v)| (k, v.clone()))
+                .collect(),
         };
 
         serde_json::to_vec(&req)
@@ -301,13 +368,18 @@ impl Codec for MessagesCodec {
             role: "assistant".into(),
             model: response.model.clone().unwrap_or_default(),
             content: content_blocks,
-            stop_reason: response.stop_reason.as_ref().map(|r| match r {
-                StopReason::EndTurn => "end_turn",
-                StopReason::MaxTokens => "max_tokens",
-                StopReason::ToolUse => "tool_use",
-                StopReason::StopSequence => "stop_sequence",
-                _ => "end_turn",
-            }.into()),
+            stop_reason: response.stop_reason.as_ref().map(|r| {
+                match r {
+                    StopReason::EndTurn => "end_turn",
+                    StopReason::MaxTokens => "max_tokens",
+                    StopReason::ToolUse => "tool_use",
+                    StopReason::StopSequence => "stop_sequence",
+                    StopReason::ContentFilter => "refusal",
+                    StopReason::PauseTurn => "end_turn",
+                    _ => "end_turn",
+                }
+                .into()
+            }),
             stop_sequence: response.stop_sequence.clone(),
             usage: ir_usage_to_m(&response.usage),
         };
@@ -352,7 +424,8 @@ impl Codec for MessagesCodec {
                     response: None,
                     index: event.index.unwrap_or(0) as i32,
                     delta: Some(IrBlock {
-                        content_type: cb.map_or(ContentType::Text, |b| block_type_to_ir(&b.block_type)),
+                        content_type: cb
+                            .map_or(ContentType::Text, |b| block_type_to_ir(&b.block_type)),
                         tool_use: cb.and_then(tool_use_start),
                         thinking: cb.and_then(thinking_block),
                         redacted_thinking: cb.and_then(redacted_thinking_block),
@@ -365,18 +438,29 @@ impl Codec for MessagesCodec {
             }
             "content_block_delta" => {
                 let delta = event.delta.as_ref();
-                let ct = delta.and_then(|d| d.delta_type.as_deref()).map(delta_type_to_ir).unwrap_or(ContentType::Text);
+                let ct = delta
+                    .and_then(|d| d.delta_type.as_deref())
+                    .map(delta_type_to_ir)
+                    .unwrap_or(ContentType::Text);
                 Ok(IrStreamEvent {
                     event_type: StreamEventType::Delta,
                     response: None,
                     index: event.index.unwrap_or(0) as i32,
                     delta: Some(IrBlock {
                         content_type: ct,
-                        text: delta.and_then(|d| d.text.as_ref()).map(|t| TextContent { text: t.clone() }),
-                        tool_use: delta.and_then(|d| d.partial_json.as_ref()).and_then(|json| {
-                            let input: serde_json::Value = serde_json::from_str(json).ok()?;
-                            Some(ToolUseContent { id: String::new(), name: String::new(), arguments: Some(input) })
-                        }),
+                        text: delta
+                            .and_then(|d| d.text.as_ref())
+                            .map(|t| TextContent { text: t.clone() }),
+                        tool_use: delta
+                            .and_then(|d| d.partial_json.as_ref())
+                            .and_then(|json| {
+                                let input: serde_json::Value = serde_json::from_str(json).ok()?;
+                                Some(ToolUseContent {
+                                    id: String::new(),
+                                    name: String::new(),
+                                    arguments: Some(input),
+                                })
+                            }),
                         ..Default::default()
                     }),
                     stop_reason: None,
@@ -394,7 +478,9 @@ impl Codec for MessagesCodec {
                 error: None,
             }),
             "message_delta" => {
-                let stop = event.delta.as_ref()
+                let stop = event
+                    .delta
+                    .as_ref()
                     .and_then(|d| d.stop_reason.as_ref())
                     .map(|s| match s.as_str() {
                         "end_turn" => StopReason::EndTurn,
@@ -415,24 +501,59 @@ impl Codec for MessagesCodec {
             }
             "message_stop" => Ok(IrStreamEvent {
                 event_type: StreamEventType::Stop,
-                response: None, index: 0, delta: None,
-                stop_reason: None, usage: None, error: None,
+                response: None,
+                index: 0,
+                delta: None,
+                stop_reason: None,
+                usage: None,
+                error: None,
             }),
             "error" => Ok(IrStreamEvent {
                 event_type: StreamEventType::Error,
-                response: None, index: 0, delta: None,
-                stop_reason: None, usage: None,
+                response: None,
+                index: 0,
+                delta: None,
+                stop_reason: None,
+                usage: None,
                 error: Some(llm_mux_core::ir::StreamError {
-                    error_type: Some("api_error".into()),
+                    error_type: event
+                        .message
+                        .as_ref()
+                        .and_then(|m| m.content.first())
+                        .map(|b| b.text.clone().unwrap_or_default())
+                        .or_else(|| {
+                            serde_json::from_str::<serde_json::Value>(data)
+                                .ok()
+                                .and_then(|v| {
+                                    v.get("error")
+                                        .and_then(|e| e.get("type"))
+                                        .and_then(|t| t.as_str())
+                                        .map(|s| s.to_string())
+                                })
+                        }),
                     code: None,
-                    message: event.message.as_ref().map(|m| m.id.clone()),
+                    message: {
+                        let err_msg = serde_json::from_str::<serde_json::Value>(data)
+                            .ok()
+                            .and_then(|v| {
+                                v.get("error")
+                                    .and_then(|e| e.get("message"))
+                                    .and_then(|m| m.as_str())
+                                    .map(|s| s.to_string())
+                            });
+                        err_msg
+                    },
                     param: None,
                 }),
             }),
             _ => Ok(IrStreamEvent {
                 event_type: StreamEventType::Delta,
-                response: None, index: 0, delta: None,
-                stop_reason: None, usage: None, error: None,
+                response: None,
+                index: 0,
+                delta: None,
+                stop_reason: None,
+                usage: None,
+                error: None,
             }),
         }
     }
@@ -481,20 +602,27 @@ impl Codec for MessagesCodec {
                 })
             }
             StreamEventType::Delta => {
-                let delta_type = event.delta.as_ref().map(|d| match d.content_type {
-                    ContentType::Text => "text_delta",
-                    ContentType::ToolUse => "input_json_delta",
-                    ContentType::Thinking => "thinking_delta",
-                    _ => "text_delta",
-                }.to_string());
-                let stop_str = event.stop_reason.as_ref().map(|r| match r {
-                    StopReason::EndTurn => "end_turn",
-                    StopReason::MaxTokens => "max_tokens",
-                    StopReason::ToolUse => "tool_use",
-                    StopReason::StopSequence => "stop_sequence",
-                    StopReason::Other(s) => s.as_str(),
-                    _ => "end_turn",
-                }.to_string());
+                let delta_type = event.delta.as_ref().map(|d| {
+                    match d.content_type {
+                        ContentType::Text => "text_delta",
+                        ContentType::ToolUse => "input_json_delta",
+                        ContentType::Thinking => "thinking_delta",
+                        _ => "text_delta",
+                    }
+                    .to_string()
+                });
+                let stop_str = event.stop_reason.as_ref().map(|r| {
+                    match r {
+                        StopReason::EndTurn => "end_turn",
+                        StopReason::MaxTokens => "max_tokens",
+                        StopReason::ToolUse => "tool_use",
+                        StopReason::StopSequence => "stop_sequence",
+                        StopReason::ContentFilter => "refusal",
+                        StopReason::PauseTurn => "end_turn",
+                        StopReason::Other(s) => s.as_str(),
+                    }
+                    .to_string()
+                });
                 serde_json::to_string(&m::StreamEvent {
                     event_type: "content_block_delta".into(),
                     message: None,
@@ -502,10 +630,15 @@ impl Codec for MessagesCodec {
                     content_block: None,
                     delta: Some(m::StreamDelta {
                         delta_type,
-                        text: event.delta.as_ref().and_then(|d| d.text.as_ref().map(|t| t.text.clone())),
+                        text: event
+                            .delta
+                            .as_ref()
+                            .and_then(|d| d.text.as_ref().map(|t| t.text.clone())),
                         stop_reason: stop_str,
                         stop_sequence: None,
-                        partial_json: event.delta.as_ref()
+                        partial_json: event
+                            .delta
+                            .as_ref()
                             .and_then(|d| d.tool_use.as_ref())
                             .and_then(|tu| tu.arguments.as_ref())
                             .map(|v| v.to_string()),
@@ -513,19 +646,19 @@ impl Codec for MessagesCodec {
                     usage: event.usage.as_ref().map(ir_usage_to_m),
                 })
             }
-            StreamEventType::ContentBlockStop => {
-                serde_json::to_string(&m::StreamEvent {
-                    event_type: "content_block_stop".into(),
-                    message: None,
-                    index: Some(event.index as i64),
-                    content_block: None,
-                    delta: None,
-                    usage: None,
-                })
-            }
+            StreamEventType::ContentBlockStop => serde_json::to_string(&m::StreamEvent {
+                event_type: "content_block_stop".into(),
+                message: None,
+                index: Some(event.index as i64),
+                content_block: None,
+                delta: None,
+                usage: None,
+            }),
             StreamEventType::Stop => return Ok("data: [DONE]\n\n".into()),
             StreamEventType::Error => {
-                let msg = event.error.as_ref()
+                let msg = event
+                    .error
+                    .as_ref()
                     .and_then(|e| e.message.clone())
                     .unwrap_or_else(|| "unknown error".into());
                 return Ok(format!(
@@ -548,7 +681,8 @@ impl Codec for MessagesCodec {
                     404 => "not_found_error",
                     429 => "rate_limit_error",
                     _ => "api_error",
-                }.into(),
+                }
+                .into(),
                 message: message.into(),
             },
         };
@@ -579,7 +713,9 @@ fn m_block_to_ir(block: &m::ContentBlock) -> IrBlock {
     match block.block_type.as_str() {
         "text" => IrBlock {
             content_type: ContentType::Text,
-            text: Some(TextContent { text: block.text.clone().unwrap_or_default() }),
+            text: Some(TextContent {
+                text: block.text.clone().unwrap_or_default(),
+            }),
             ..Default::default()
         },
         "tool_use" => IrBlock {
@@ -639,7 +775,8 @@ fn tool_result_inner(block: &m::ContentBlock) -> Vec<IrBlock> {
                 ..Default::default()
             }]
         }
-        Some(serde_json::Value::Array(arr)) => arr.iter()
+        Some(serde_json::Value::Array(arr)) => arr
+            .iter()
             .filter_map(|v| serde_json::from_value::<m::ContentBlock>(v.clone()).ok())
             .map(|b| m_block_to_ir(&b))
             .collect(),
@@ -654,16 +791,26 @@ fn parse_anthropic_tool_choice(value: &serde_json::Value) -> Option<IrToolChoice
                 "auto" | "any" | "none" => s.clone(),
                 _ => return None,
             };
-            Some(IrToolChoice { choice_type: ct, tool_name: None, allowed_tool_names: Vec::new(), allow_parallel_calls: None })
-        }
-        serde_json::Value::Object(obj) => {
             Some(IrToolChoice {
-                choice_type: obj.get("type").and_then(|v| v.as_str()).unwrap_or("tool").into(),
-                tool_name: obj.get("name").and_then(|v| v.as_str()).map(|s| s.into()),
+                choice_type: ct,
+                tool_name: None,
                 allowed_tool_names: Vec::new(),
-                allow_parallel_calls: obj.get("disable_parallel_tool_use").and_then(|v| v.as_bool()).map(|b| !b),
+                allow_parallel_calls: None,
             })
         }
+        serde_json::Value::Object(obj) => Some(IrToolChoice {
+            choice_type: obj
+                .get("type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("tool")
+                .into(),
+            tool_name: obj.get("name").and_then(|v| v.as_str()).map(|s| s.into()),
+            allowed_tool_names: Vec::new(),
+            allow_parallel_calls: obj
+                .get("disable_parallel_tool_use")
+                .and_then(|v| v.as_bool())
+                .map(|b| !b),
+        }),
         _ => None,
     }
 }
@@ -672,7 +819,12 @@ fn m_usage_to_ir(u: &m::Usage) -> IrUsage {
     IrUsage {
         input_tokens: u.input_tokens,
         output_tokens: u.output_tokens,
-        total_tokens: Some(u.input_tokens.unwrap_or(0) + u.output_tokens.unwrap_or(0) + u.cache_read_input_tokens.unwrap_or(0) + u.cache_creation_input_tokens.unwrap_or(0)),
+        total_tokens: Some(
+            u.input_tokens.unwrap_or(0)
+                + u.output_tokens.unwrap_or(0)
+                + u.cache_read_input_tokens.unwrap_or(0)
+                + u.cache_creation_input_tokens.unwrap_or(0),
+        ),
         cache_read_tokens: u.cache_read_input_tokens,
         cache_creation_tokens: u.cache_creation_input_tokens,
         thinking_tokens: None,
@@ -737,5 +889,6 @@ fn ir_block_type_to_anthropic_str(block: &IrBlock) -> String {
         ContentType::RedactedThinking => "redacted_thinking",
         ContentType::Image => "image",
         _ => "text",
-    }.into()
+    }
+    .into()
 }

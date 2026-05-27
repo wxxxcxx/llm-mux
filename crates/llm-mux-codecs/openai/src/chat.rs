@@ -1,8 +1,13 @@
 use std::collections::HashMap;
 
 use llm_mux_core::codec::{Codec, CodecError};
-use llm_mux_core::ir::{IrMessage, IrRequest, IrResponse, IrStreamEvent, IrTool, IrToolChoice, IrUsage, StreamEventType};
-use llm_mux_core::types::{ContentBlock, ContentType, Protocol, Role, StopReason, TextContent, ToolUseContent, ToolResultContent, ImageContent};
+use llm_mux_core::ir::{
+    IrMessage, IrRequest, IrResponse, IrStreamEvent, IrTool, IrToolChoice, IrUsage, StreamEventType,
+};
+use llm_mux_core::types::{
+    ContentBlock, ContentType, ImageContent, Protocol, Role, StopReason, TextContent,
+    ToolResultContent, ToolUseContent,
+};
 
 use crate::models::*;
 
@@ -15,24 +20,75 @@ impl Codec for ChatCompletionsCodec {
     }
 
     fn known_fields(&self) -> &HashMap<String, bool> {
-        static FIELDS: std::sync::LazyLock<HashMap<String, bool>> = std::sync::LazyLock::new(|| {
-            let mut m = HashMap::new();
-            m.insert("model".into(), true);
-            m.insert("messages".into(), true);
-            m.insert("stream".into(), true);
-            m.insert("temperature".into(), true);
-            m.insert("max_tokens".into(), true);
-            m.insert("max_completion_tokens".into(), true);
-            m.insert("top_p".into(), true);
-            m.insert("stop".into(), true);
-            m.insert("tools".into(), true);
-            m.insert("tool_choice".into(), true);
-            m.insert("response_format".into(), true);
-            m.insert("seed".into(), true);
-            m.insert("user".into(), true);
-            m
-        });
+        static FIELDS: std::sync::LazyLock<HashMap<String, bool>> =
+            std::sync::LazyLock::new(|| {
+                let mut m = HashMap::new();
+                m.insert("model".into(), true);
+                m.insert("messages".into(), true);
+                m.insert("stream".into(), true);
+                m.insert("temperature".into(), true);
+                m.insert("max_tokens".into(), true);
+                m.insert("max_completion_tokens".into(), true);
+                m.insert("top_p".into(), true);
+                m.insert("stop".into(), true);
+                m.insert("tools".into(), true);
+                m.insert("tool_choice".into(), true);
+                m.insert("response_format".into(), true);
+                m.insert("seed".into(), true);
+                m.insert("user".into(), true);
+                m
+            });
         &FIELDS
+    }
+
+    fn decode_response(&self, body: &[u8]) -> Result<IrResponse, CodecError> {
+        let resp: ChatCompletionResponse = serde_json::from_slice(body)?;
+        let mut content = Vec::new();
+        if let Some(choice) = resp.choices.first() {
+            if let Some(ref msg_content) = choice.message.content {
+                content.extend(chat_content_to_blocks(msg_content));
+            }
+            if !choice.message.tool_calls.is_empty() {
+                for tc in &choice.message.tool_calls {
+                    let args: serde_json::Value =
+                        serde_json::from_str(&tc.function.arguments).unwrap_or_default();
+                    content.push(ContentBlock {
+                        content_type: ContentType::ToolUse,
+                        tool_use: Some(ToolUseContent {
+                            id: tc.id.clone(),
+                            name: tc.function.name.clone(),
+                            arguments: Some(args),
+                        }),
+                        ..Default::default()
+                    });
+                }
+            }
+        }
+        let stop_reason = resp
+            .choices
+            .first()
+            .and_then(|c| c.finish_reason.as_ref())
+            .map(|fr| match fr.as_str() {
+                "stop" => StopReason::EndTurn,
+                "length" => StopReason::MaxTokens,
+                "tool_calls" => StopReason::ToolUse,
+                "content_filter" => StopReason::ContentFilter,
+                _ => StopReason::Other(fr.clone()),
+            });
+        Ok(IrResponse {
+            id: Some(resp.id),
+            model: Some(resp.model),
+            content,
+            stop_reason,
+            stop_sequence: None,
+            usage: IrUsage {
+                input_tokens: resp.usage.as_ref().map(|u| u.prompt_tokens),
+                output_tokens: resp.usage.as_ref().map(|u| u.completion_tokens),
+                total_tokens: resp.usage.as_ref().map(|u| u.total_tokens),
+                ..Default::default()
+            },
+            provider_extensions: HashMap::new(),
+        })
     }
 
     fn decode_request(&self, body: &[u8]) -> Result<IrRequest, CodecError> {
@@ -51,6 +107,20 @@ impl Codec for ChatCompletionsCodec {
                 format_type: rf.format_type.clone(),
                 json_schema: rf.json_schema.clone(),
             });
+        }
+
+        // Provider extensions from the `extra` flattened fields
+        ir.provider_extensions = req.extra.clone().into_iter().collect();
+
+        // Capture unknown top-level fields from the raw JSON body
+        if let Ok(raw) = serde_json::from_slice::<serde_json::Value>(body) {
+            if let Some(obj) = raw.as_object() {
+                for key in obj.keys() {
+                    if !self.known_fields().contains_key(key.as_str()) {
+                        ir.raw_extra.insert(key.clone(), obj[key].clone());
+                    }
+                }
+            }
         }
 
         // Messages: system → system_prompt, others → IrMessage
@@ -181,14 +251,21 @@ impl Codec for ChatCompletionsCodec {
                             }
                             ContentType::ToolUse => {
                                 if let Some(tu) = &block.tool_use {
-                                    let args = tu.arguments.as_ref().map(|v| match v {
-                                        serde_json::Value::String(s) => s.clone(),
-                                        other => other.to_string(),
-                                    }).unwrap_or_default();
+                                    let args = tu
+                                        .arguments
+                                        .as_ref()
+                                        .map(|v| match v {
+                                            serde_json::Value::String(s) => s.clone(),
+                                            other => other.to_string(),
+                                        })
+                                        .unwrap_or_default();
                                     tool_calls.push(ToolCall {
                                         id: tu.id.clone(),
                                         call_type: "function".into(),
-                                        function: FunctionCall { name: tu.name.clone(), arguments: args },
+                                        function: FunctionCall {
+                                            name: tu.name.clone(),
+                                            arguments: args,
+                                        },
                                         index: None,
                                     });
                                 }
@@ -212,7 +289,9 @@ impl Codec for ChatCompletionsCodec {
                 Role::Tool => {
                     let content = if let Some(block) = msg.content.first() {
                         if let Some(tr) = &block.tool_result {
-                            let text = tr.content.iter()
+                            let text = tr
+                                .content
+                                .iter()
                                 .filter_map(|b| b.text.as_ref().map(|t| t.text.as_str()))
                                 .collect::<Vec<_>>()
                                 .join("");
@@ -228,7 +307,10 @@ impl Codec for ChatCompletionsCodec {
                         content: Some(content),
                         name: None,
                         tool_calls: Vec::new(),
-                        tool_call_id: msg.content.first().and_then(|b| b.tool_result.as_ref().map(|tr| tr.tool_use_id.clone())),
+                        tool_call_id: msg
+                            .content
+                            .first()
+                            .and_then(|b| b.tool_result.as_ref().map(|tr| tr.tool_use_id.clone())),
                     });
                 }
                 _ => {}
@@ -336,7 +418,7 @@ impl Codec for ChatCompletionsCodec {
                     StopReason::ToolUse => "tool_calls".into(),
                     StopReason::StopSequence => "stop".into(),
                     StopReason::ContentFilter => "content_filter".into(),
-                    StopReason::PauseTurn => "stop".into(),
+                    StopReason::PauseTurn => "pause_turn".into(),
                     StopReason::Other(s) => s.clone(),
                 }),
             }],
@@ -512,8 +594,7 @@ impl Codec for ChatCompletionsCodec {
                 };
                 Ok(format!(
                     "data: {}\n\n",
-                    serde_json::to_string(&chunk)
-                        .map_err(|e| CodecError::Encode(e.to_string()))?
+                    serde_json::to_string(&chunk).map_err(|e| CodecError::Encode(e.to_string()))?
                 ))
             }
             StreamEventType::Delta => {
@@ -544,11 +625,7 @@ impl Codec for ChatCompletionsCodec {
                                     } else {
                                         Some(tu.name.clone())
                                     },
-                                    arguments: if args.is_empty() {
-                                        None
-                                    } else {
-                                        Some(args)
-                                    },
+                                    arguments: if args.is_empty() { None } else { Some(args) },
                                 }),
                             }]
                         } else {
@@ -575,8 +652,7 @@ impl Codec for ChatCompletionsCodec {
                 };
                 Ok(format!(
                     "data: {}\n\n",
-                    serde_json::to_string(&chunk)
-                        .map_err(|e| CodecError::Encode(e.to_string()))?
+                    serde_json::to_string(&chunk).map_err(|e| CodecError::Encode(e.to_string()))?
                 ))
             }
             StreamEventType::Stop => {
@@ -589,7 +665,7 @@ impl Codec for ChatCompletionsCodec {
                         StopReason::ToolUse => "tool_calls",
                         StopReason::StopSequence => "stop",
                         StopReason::ContentFilter => "content_filter",
-                        StopReason::PauseTurn => "stop",
+                        StopReason::PauseTurn => "pause_turn",
                         StopReason::Other(s) => s.as_str(),
                     })
                     .unwrap_or("stop");
@@ -612,8 +688,8 @@ impl Codec for ChatCompletionsCodec {
                     }],
                     usage,
                 };
-                let body = serde_json::to_string(&chunk)
-                    .map_err(|e| CodecError::Encode(e.to_string()))?;
+                let body =
+                    serde_json::to_string(&chunk).map_err(|e| CodecError::Encode(e.to_string()))?;
                 Ok(format!("data: {body}\n\ndata: [DONE]\n\n"))
             }
             StreamEventType::Error => {
@@ -651,9 +727,7 @@ fn chat_content_to_blocks(content: &ChatContent) -> Vec<ContentBlock> {
             } else {
                 vec![ContentBlock {
                     content_type: ContentType::Text,
-                    text: Some(TextContent {
-                        text: text.clone(),
-                    }),
+                    text: Some(TextContent { text: text.clone() }),
                     ..Default::default()
                 }]
             }
@@ -735,18 +809,24 @@ fn blocks_to_chat_content(blocks: &[ContentBlock]) -> ChatContent {
             return ChatContent::Text(text.text.clone());
         }
     }
-    let parts: Vec<ContentPart> = blocks.iter().filter_map(|b| match b.content_type {
-        ContentType::Text => b.text.as_ref().map(|t| ContentPart {
-            part_type: "text".into(),
-            text: Some(t.text.clone()),
-            image_url: None,
-        }),
-        ContentType::Image => b.image.as_ref().map(|img| ContentPart {
-            part_type: "image_url".into(),
-            text: None,
-            image_url: Some(ImageUrl { url: img.url.clone().unwrap_or_default(), detail: img.detail.clone() }),
-        }),
-        _ => None,
-    }).collect();
+    let parts: Vec<ContentPart> = blocks
+        .iter()
+        .filter_map(|b| match b.content_type {
+            ContentType::Text => b.text.as_ref().map(|t| ContentPart {
+                part_type: "text".into(),
+                text: Some(t.text.clone()),
+                image_url: None,
+            }),
+            ContentType::Image => b.image.as_ref().map(|img| ContentPart {
+                part_type: "image_url".into(),
+                text: None,
+                image_url: Some(ImageUrl {
+                    url: img.url.clone().unwrap_or_default(),
+                    detail: img.detail.clone(),
+                }),
+            }),
+            _ => None,
+        })
+        .collect();
     ChatContent::Parts(parts)
 }
