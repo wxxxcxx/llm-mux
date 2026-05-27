@@ -11,6 +11,20 @@ use llm_mux_core::types::{
 
 use crate::models::*;
 
+/// Fields that are Anthropic-specific and should not be forwarded to OpenAI Chat API.
+fn is_anthropic_only_field(key: &str) -> bool {
+    matches!(
+        key,
+        "context_management"
+            | "metadata"
+            | "service_tier"
+            | "thinking"
+            | "cache_control"
+            | "display_name"
+            | "display_text"
+    )
+}
+
 /// Codec for OpenAI Chat Completions protocol.
 pub struct ChatCompletionsCodec;
 
@@ -47,6 +61,17 @@ impl Codec for ChatCompletionsCodec {
         if let Some(choice) = resp.choices.first() {
             if let Some(ref msg_content) = choice.message.content {
                 content.extend(chat_content_to_blocks(msg_content));
+            }
+            if content.is_empty() {
+                if let Some(ref reasoning) = choice.message.reasoning_content {
+                    content.push(ContentBlock {
+                        content_type: ContentType::Text,
+                        text: Some(TextContent {
+                            text: reasoning.clone(),
+                        }),
+                        ..Default::default()
+                    });
+                }
             }
             if !choice.message.tool_calls.is_empty() {
                 for tc in &choice.message.tool_calls {
@@ -218,6 +243,7 @@ impl Codec for ChatCompletionsCodec {
         for block in &request.system_prompt {
             if let Some(text) = &block.text {
                 messages.push(ChatMessage {
+                    reasoning_content: None,
                     role: "system".into(),
                     content: Some(ChatContent::Text(text.text.clone())),
                     name: None,
@@ -232,6 +258,7 @@ impl Codec for ChatCompletionsCodec {
                 Role::User => {
                     let parts = blocks_to_chat_content(&msg.content);
                     messages.push(ChatMessage {
+                    reasoning_content: None,
                         role: "user".into(),
                         content: Some(parts),
                         name: None,
@@ -279,6 +306,7 @@ impl Codec for ChatCompletionsCodec {
                         Some(ChatContent::Text(text_parts.join("")))
                     };
                     messages.push(ChatMessage {
+                    reasoning_content: None,
                         role: "assistant".into(),
                         content,
                         name: None,
@@ -303,6 +331,7 @@ impl Codec for ChatCompletionsCodec {
                         ChatContent::Text(String::new())
                     };
                     messages.push(ChatMessage {
+                    reasoning_content: None,
                         role: "tool".into(),
                         content: Some(content),
                         name: None,
@@ -319,8 +348,16 @@ impl Codec for ChatCompletionsCodec {
 
         let mut tools = Vec::new();
         for tool in &request.tools {
+            let tool_type = tool
+                .r#type
+                .as_deref()
+                .and_then(|t| match t {
+                    "function" | "web_search_preview" | "code_interpreter" => Some(t),
+                    _ => Some("function"),
+                })
+                .unwrap_or("function");
             tools.push(ChatTool {
-                tool_type: tool.r#type.clone().unwrap_or_else(|| "function".into()),
+                tool_type: tool_type.into(),
                 function: FunctionDef {
                     name: tool.name.clone(),
                     description: tool.description.clone(),
@@ -350,7 +387,12 @@ impl Codec for ChatCompletionsCodec {
             }),
             seed: None,
             user: None,
-            extra: request.provider_extensions.clone().into_iter().map(|(k, v)| (k, v.clone())).collect(),
+            extra: request
+                .provider_extensions
+                .iter()
+                .filter(|(k, _)| !is_anthropic_only_field(k))
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
         };
 
         serde_json::to_vec(&req)
@@ -397,6 +439,7 @@ impl Codec for ChatCompletionsCodec {
         };
 
         let message = ChatMessage {
+                    reasoning_content: None,
             role: "assistant".into(),
             content,
             name: None,
@@ -446,7 +489,7 @@ impl Codec for ChatCompletionsCodec {
                 return Ok(IrStreamEvent {
                     event_type: StreamEventType::ContentBlockStart,
                     response: Some(IrResponse {
-                        id: Some(chunk.id),
+                        id: chunk.id,
                         model: Some(chunk.model),
                         content: Vec::new(),
                         stop_reason: None,
@@ -572,8 +615,7 @@ impl Codec for ChatCompletionsCodec {
                     id: event
                         .response
                         .as_ref()
-                        .and_then(|r| r.id.clone())
-                        .unwrap_or_default(),
+                        .and_then(|r| r.id.clone()),
                     object: "chat.completion.chunk".into(),
                     created: 0,
                     model: event
@@ -635,7 +677,7 @@ impl Codec for ChatCompletionsCodec {
                     .unwrap_or_default();
 
                 let chunk = ChatCompletionChunk {
-                    id: String::new(),
+                    id: None,
                     object: "chat.completion.chunk".into(),
                     created: 0,
                     model: String::new(),
@@ -677,7 +719,7 @@ impl Codec for ChatCompletionsCodec {
                 });
 
                 let chunk = ChatCompletionChunk {
-                    id: String::new(),
+                    id: None,
                     object: "chat.completion.chunk".into(),
                     created: 0,
                     model: String::new(),

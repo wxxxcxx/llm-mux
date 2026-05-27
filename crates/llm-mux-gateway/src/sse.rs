@@ -8,7 +8,7 @@ use llm_mux_core::ir::StreamEventType;
 use reqwest::Response as ReqwestResponse;
 use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
-use tracing::error;
+use tracing::{debug, error};
 
 const BOUNDED_CHANNEL_SIZE: usize = 64;
 
@@ -71,7 +71,10 @@ async fn proxy_sse_events(
                 continue;
             }
 
-            if let Some(data) = line.strip_prefix("data: ") {
+            if let Some(data) = line
+                .strip_prefix("data:")
+                .or_else(|| line.strip_prefix("data: "))
+            {
                 let data = data.trim();
                 if data == "[DONE]" {
                     let stop = llm_mux_core::ir::IrStreamEvent {
@@ -92,22 +95,14 @@ async fn proxy_sse_events(
                         forward_event(&tx, inbound, &ir_event).await;
                     }
                     Err(e) => {
-                        error!("SSE decode error: {}", e);
-                        let ir_err = llm_mux_core::ir::IrStreamEvent {
-                            event_type: StreamEventType::Error,
-                            response: None,
-                            index: 0,
-                            delta: None,
-                            stop_reason: None,
-                            usage: None,
-                            error: Some(StreamError {
-                                error_type: Some("decode_error".into()),
-                                code: None,
-                                message: Some(e.to_string()),
-                                param: None,
-                            }),
-                        };
-                        forward_event(&tx, inbound, &ir_err).await;
+                        match inbound.decode_stream_event(None, data) {
+                            Ok(ir_event) => {
+                                forward_event(&tx, inbound, &ir_event).await;
+                            }
+                            Err(_) => {
+                                debug!("SSE decode error (both codecs): {e}");
+                            }
+                        }
                     }
                 }
             }
@@ -123,14 +118,31 @@ async fn forward_event(
     event: &llm_mux_core::ir::IrStreamEvent,
 ) {
     match inbound.encode_stream_event(event) {
-        Ok(s) => {
-            if tx.send(Ok(Event::default().data(s))).await.is_err() {
-                // Receiver dropped, stop forwarding
-            }
+        Ok(sse_str) => {
+            let event = sse_str_to_event(&sse_str);
+            if tx.send(event).await.is_err() {}
         }
         Err(e) => {
             error!("SSE encode error: {}", e);
         }
+    }
+}
+
+fn sse_str_to_event(sse_str: &str) -> Result<Event, axum::Error> {
+    let trimmed = sse_str.trim();
+    if trimmed == "data: [DONE]" {
+        return Ok(Event::default().data("[DONE]"));
+    }
+    if let Some(data) = trimmed
+        .strip_prefix("data:")
+        .or_else(|| trimmed.strip_prefix("data: "))
+    {
+        Ok(Event::default().data(data.trim().to_string()))
+    } else {
+        Err(axum::Error::new(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("invalid SSE string: {sse_str}"),
+        )))
     }
 }
 

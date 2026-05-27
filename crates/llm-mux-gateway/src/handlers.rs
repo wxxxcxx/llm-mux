@@ -8,7 +8,7 @@ use llm_mux_core::ir::IrRequest;
 use llm_mux_core::types::Protocol;
 use llm_mux_core::{ConfigAuthenticator, ConfigurableRouter, Router};
 use reqwest::Client;
-use tracing::error;
+use tracing::{debug, error, info};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -19,11 +19,14 @@ pub struct AppState {
 fn validate_auth(auth: &Arc<ConfigAuthenticator>, api_key: &Option<String>) -> Option<Response> {
     match api_key {
         Some(key) if auth.authenticate(key).is_ok() => None,
-        _ => Some(
-            (StatusCode::UNAUTHORIZED,
-             r#"{"error":{"message":"Invalid or missing API key","type":"authentication_error"}}"#)
-                .into_response(),
-        ),
+        _ => {
+            debug!(has_key = api_key.is_some(), "auth rejected");
+            Some(
+                (StatusCode::UNAUTHORIZED,
+                 r#"{"error":{"message":"Invalid or missing API key","type":"authentication_error"}}"#)
+                    .into_response(),
+            )
+        }
     }
 }
 
@@ -116,9 +119,28 @@ async fn handle_request(
     inbound_codec: &dyn Codec,
     body: &str,
 ) -> Response {
+    let body_preview: String = body.chars().take(500).collect();
+    debug!(
+        protocol = ?inbound_protocol,
+        body_len = body.len(),
+        body_preview = %body_preview,
+        "incoming request"
+    );
+
     let ir = match inbound_codec.decode_request(body.as_bytes()) {
-        Ok(ir) => ir,
+        Ok(ir) => {
+            info!(
+                model = %ir.model,
+                stream = ir.stream,
+                msg_count = ir.messages.len(),
+                has_tools = ir.has_tools(),
+                has_media = ir.has_media(),
+                "decoded request"
+            );
+            ir
+        }
         Err(e) => {
+            error!(error = %e, "failed to decode request");
             return codec_error_response(inbound_codec, 400, &e);
         }
     };
@@ -140,8 +162,17 @@ async fn handle_request(
     };
 
     let route = match state.router.route(&route_info) {
-        Ok(r) => r,
+        Ok(r) => {
+            info!(
+                target_protocol = ?r.protocol,
+                target_model = %r.model,
+                base_url = %r.base_url,
+                "route matched"
+            );
+            r
+        }
         Err(e) => {
+            error!(error = %e, "routing failed");
             return codec_error_response(inbound_codec, 502, &e);
         }
     };
@@ -170,6 +201,17 @@ async fn handle_request(
     let client = Client::new();
     let url = upstream_url(&route);
 
+    let ob_body_preview: String = String::from_utf8_lossy(&outbound_body)
+        .chars()
+        .take(500)
+        .collect();
+    debug!(
+        url = %url,
+        body_len = outbound_body.len(),
+        body_preview = %ob_body_preview,
+        "upstream request"
+    );
+
     let mut req_builder = client.post(&url).body(outbound_body);
 
     for (k, v) in &route.headers {
@@ -188,8 +230,18 @@ async fn handle_request(
 
     let status = upstream_resp.status();
     let resp_bytes = match upstream_resp.bytes().await {
-        Ok(b) => b,
+        Ok(b) => {
+            let preview: String = String::from_utf8_lossy(&b).chars().take(500).collect();
+            info!(
+                upstream_status = %status,
+                resp_len = b.len(),
+                resp_preview = %preview,
+                "upstream response"
+            );
+            b
+        }
         Err(e) => {
+            error!(error = %e, "failed to read upstream response");
             return codec_error_response(inbound_codec, 502, &e);
         }
     };
@@ -197,6 +249,7 @@ async fn handle_request(
     match outbound_codec.decode_response(&resp_bytes) {
         Ok(ir_resp) => match inbound_codec.encode_response(&ir_resp) {
             Ok(encoded) => {
+                debug!(resp_len = encoded.len(), "response encoded for client");
                 let mut resp = Response::new(axum::body::Body::from(encoded));
                 *resp.status_mut() = StatusCode::OK;
                 resp.headers_mut().insert(

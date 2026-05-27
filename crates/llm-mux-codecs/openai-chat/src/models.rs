@@ -37,6 +37,8 @@ pub struct ChatMessage {
     pub role: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content: Option<ChatContent>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_content: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -145,7 +147,8 @@ pub struct ChatChoice {
 /// Chat completion streaming chunk.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatCompletionChunk {
-    pub id: String,
+    #[serde(default)]
+    pub id: Option<String>,
     pub object: String,
     pub created: i64,
     pub model: String,
