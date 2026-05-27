@@ -19,4 +19,4 @@ Thumbs.db
 # Docker (if any local overrides)
 docker-compose.override.yml
 
-.specify/presets/.cache
+.cache
