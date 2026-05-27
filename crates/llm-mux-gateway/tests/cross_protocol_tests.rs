@@ -2,7 +2,7 @@ use anthropic_codec::MessagesCodec;
 use llm_mux_core::codec::Codec;
 use llm_mux_core::ir::{IrStreamEvent, IrUsage, StreamEventType};
 use llm_mux_core::types::{ContentBlock, ContentType, StopReason, TextContent, ToolUseContent};
-use openai_codec::ChatCompletionsCodec;
+use openai_chat_codec::ChatCompletionsCodec;
 
 /// Full roundtrip: OpenAI Chat request → IR → Anthropic Messages request
 #[test]

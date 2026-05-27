@@ -29,7 +29,7 @@ fn validate_auth(auth: &Arc<ConfigAuthenticator>, api_key: &Option<String>) -> O
 
 fn outbound_codec_for(protocol: Protocol) -> Option<Box<dyn Codec>> {
     match protocol {
-        Protocol::OpenAiChat => Some(Box::new(openai_codec::ChatCompletionsCodec)),
+        Protocol::OpenAiChat => Some(Box::new(openai_chat_codec::ChatCompletionsCodec)),
         Protocol::Anthropic => Some(Box::new(anthropic_codec::MessagesCodec)),
         Protocol::OpenAiResponses => Some(Box::new(openai_responses_codec::ResponsesCodec)),
     }
@@ -53,7 +53,7 @@ pub async fn chat_completions(
     if let Some(resp) = validate_auth(&state.authenticator, &api_key) {
         return resp;
     }
-    let inbound = openai_codec::ChatCompletionsCodec;
+    let inbound = openai_chat_codec::ChatCompletionsCodec;
     handle_request(state, api_key, Protocol::OpenAiChat, &inbound, &body).await
 }
 
@@ -240,7 +240,7 @@ async fn handle_stream_request(
         Ok(r) => r,
         Err(e) => {
             let inbound = outbound_codec_for(inbound_protocol)
-                .unwrap_or_else(|| Box::new(openai_codec::ChatCompletionsCodec));
+                .unwrap_or_else(|| Box::new(openai_chat_codec::ChatCompletionsCodec));
             return codec_error_response(inbound.as_ref(), 502, &e);
         }
     };

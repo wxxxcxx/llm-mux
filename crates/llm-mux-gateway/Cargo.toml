@@ -10,7 +10,7 @@ path = "src/main.rs"
 
 [dependencies]
 llm-mux-core.workspace = true
-openai-codec.workspace = true
+openai-chat-codec.workspace = true
 anthropic-codec.workspace = true
 openai-responses-codec = { path = "../llm-mux-codecs/openai-responses" }
 axum.workspace = true

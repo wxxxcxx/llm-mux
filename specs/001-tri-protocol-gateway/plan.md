@@ -100,7 +100,7 @@ crates/
 │       ├── sse.rs                   # SSE 流式代理
 │       └── middleware.rs            # 认证中间件 + Request ID
 ├── llm-mux-codecs/
-│   ├── openai/                      # ✅ 已实现 — Chat Completions 编解码
+│   ├── openai-chat/                  # ✅ 已实现 — Chat Completions 编解码
 │   │   ├── Cargo.toml
 │   │   └── src/
 │   │       ├── lib.rs

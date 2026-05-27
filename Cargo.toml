@@ -3,7 +3,7 @@ resolver = "2"
 members = [
     "crates/llm-mux-core",
     "crates/llm-mux-gateway",
-    "crates/llm-mux-codecs/openai",
+    "crates/llm-mux-codecs/openai-chat",
     "crates/llm-mux-codecs/anthropic",
     "crates/llm-mux-codecs/openai-responses",
 ]
@@ -29,7 +29,7 @@ reqwest = { version = "0.12", features = ["stream", "json"] }
 
 # internal
 llm-mux-core = { path = "crates/llm-mux-core" }
-openai-codec = { path = "crates/llm-mux-codecs/openai" }
+openai-chat-codec = { path = "crates/llm-mux-codecs/openai-chat" }
 anthropic-codec = { path = "crates/llm-mux-codecs/anthropic" }
 
 [workspace.lints.rust]

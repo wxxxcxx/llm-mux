@@ -27,7 +27,7 @@
 **Purpose**: 项目初始化、依赖声明、crate 脚手架
 
 - [x] T001 在 `Cargo.toml` 添加 workspace 依赖：`axum`、`tokio`、`clap`、`serde_yaml`、`tracing-subscriber`、`uuid`、`reqwest`
-- [x] T002 [P] 创建 `crates/llm-mux-gateway/Cargo.toml`，声明对 `llm-mux-core`、`openai-codec`、`anthropic-codec`、`axum`、`tokio`、`clap`、`serde_yaml`、`tracing`、`tracing-subscriber`、`uuid`、`reqwest` 的依赖
+- [x] T002 [P] 创建 `crates/llm-mux-gateway/Cargo.toml`，声明对 `llm-mux-core`、`openai-chat-codec`、`anthropic-codec`、`axum`、`tokio`、`clap`、`serde_yaml`、`tracing`、`tracing-subscriber`、`uuid`、`reqwest` 的依赖
 - [x] T003 [P] 创建 `crates/llm-mux-codecs/openai-responses/Cargo.toml`，声明对 `llm-mux-core`、`serde`、`serde_json` 的依赖
 - [x] T004 [P] 创建 `config.example.yaml` 示例配置文件（含完整的 providers + routes 示例和注释）
 - [x] T005 确保 `cargo check` 在根目录通过
@@ -47,7 +47,7 @@
 - [x] T010 [P] 在 `crates/llm-mux-gateway/src/config.rs` 实现 `Config::from_file(path)` 和 `Config::validate()` 方法：校验 provider 引用完整性、必填字段、协议合法性、兜底规则存在性
 - [x] T011 [P] 在 `crates/llm-mux-gateway/src/middleware.rs` 实现 Request ID 中间件：为每个入站请求生成 UUID v7，注入 `X-Request-ID` 响应头，写入 `tracing` span
 - [x] T012 在 `crates/llm-mux-gateway/src/lib.rs` 初始化 `tracing-subscriber`：JSON 格式输出到 stdout，支持 `--log-level` 通过 `EnvFilter` 控制
-- [x] T012a [P] 在 `crates/llm-mux-core/src/codec.rs` 的 `Codec` trait 新增 `decode_response(&self, body: &[u8]) -> Result<IrResponse, CodecError>` 方法；在 `openai-codec` 和 `anthropic-codec` 中实现该方法（解析 JSON 响应 → IrResponse）；在 `openai-responses` codec 的 Phase 4 实现中同步添加
+- [x] T012a [P] 在 `crates/llm-mux-core/src/codec.rs` 的 `Codec` trait 新增 `decode_response(&self, body: &[u8]) -> Result<IrResponse, CodecError>` 方法；在 `openai-chat-codec` 和 `anthropic-codec` 中实现该方法（解析 JSON 响应 → IrResponse）；在 `openai-responses` codec 的 Phase 4 实现中同步添加
 
 **Checkpoint**: Foundation ready - user story implementation can now begin in parallel
 
@@ -71,9 +71,9 @@
 
 ### Implementation for User Story 1
 
-- [x] T018 [US1] 在 `crates/llm-mux-codecs/openai/src/chat.rs` 的 `decode_request` 中设置 `has_media`（检测 image 内容块），并将未知字段填充到 `raw_extra` / `provider_extensions`
+- [x] T018 [US1] 在 `crates/llm-mux-codecs/openai-chat/src/chat.rs` 的 `decode_request` 中设置 `has_media`（检测 image 内容块），并将未知字段填充到 `raw_extra` / `provider_extensions`
 - [x] T019 [US1] 在 `crates/llm-mux-codecs/anthropic/src/messages.rs` 的 `decode_request` 中设置 `has_media`（检测 image/document 块），并将未知字段填充到 `raw_extra` / `provider_extensions`
-- [x] T020 [P] [US1] 在 `crates/llm-mux-codecs/openai/src/chat.rs` 修复 `encode_response` 中 `StopReason::ContentFilter` 和 `StopReason::PauseTurn` 的映射（当前未映射到有效 Chat finish_reason）
+- [x] T020 [P] [US1] 在 `crates/llm-mux-codecs/openai-chat/src/chat.rs` 修复 `encode_response` 中 `StopReason::ContentFilter` 和 `StopReason::PauseTurn` 的映射（当前未映射到有效 Chat finish_reason）
 - [x] T021 [P] [US1] 在 `crates/llm-mux-codecs/anthropic/src/messages.rs` 修复 `encode_response` 中 `StopReason::ContentFilter` 和 `StopReason::PauseTurn` 的映射到 Anthropic stop_reason
 - [x] T022 [P] [US1] 在 `crates/llm-mux-codecs/anthropic/src/messages.rs` 修复 `decode_stream_event` 中 error 事件的 `message` 字段（当前错误地使用 `event.message.id` 而非错误消息字符串）
 - [x] T023 [US1] 运行 `cargo test` 确保所有新增测试通过，无回归

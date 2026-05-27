@@ -1,7 +1,7 @@
 use llm_mux_core::codec::Codec;
 use llm_mux_core::ir::StreamEventType;
 use llm_mux_core::types::{ContentType, Protocol, Role, StopReason};
-use openai_codec::ChatCompletionsCodec;
+use openai_chat_codec::ChatCompletionsCodec;
 
 #[test]
 fn test_decode_basic_chat_request() {
