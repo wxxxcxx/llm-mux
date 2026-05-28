@@ -60,8 +60,11 @@ impl Adapter for ChatCompletionsCodec {
 
     fn encode_stream_event(&self, event: &GenaiStreamEvent) -> Result<String, AdapterError> {
         match event {
-            GenaiStreamEvent::Chunk(chunk) => Ok(format!("data: {{\"delta\":{{\"content\":\"{}\"}}}}\n\n", chunk.content)),
-            GenaiStreamEvent::End(_) => Ok("data: [DONE]\n\n".into()),
+            GenaiStreamEvent::Chunk(chunk) => Ok(serde_json::json!({
+                "choices": [{"delta": {"content": &chunk.content}, "index": 0}],
+                "object": "chat.completion.chunk"
+            }).to_string()),
+            GenaiStreamEvent::End(_) => Ok("[DONE]".into()),
             _ => Ok(String::new()),
         }
     }

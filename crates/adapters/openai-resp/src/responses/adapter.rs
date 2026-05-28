@@ -61,13 +61,8 @@ impl Adapter for ResponsesCodec {
 
     fn encode_stream_event(&self, event: &ChatStreamEvent) -> Result<String, AdapterError> {
         match event {
-            ChatStreamEvent::Chunk(c) => Ok(format!(
-                "data: {{\"type\":\"response.output_text.delta\",\"delta\":\"{}\"}}\n\n",
-                c.content
-            )),
-            ChatStreamEvent::End(_) => {
-                Ok("data: {\"type\":\"response.completed\"}\n\ndata: [DONE]\n\n".into())
-            }
+            ChatStreamEvent::Chunk(c) => Ok(c.content.clone()),
+            ChatStreamEvent::End(_) => Ok("{}".into()),
             _ => Ok(String::new()),
         }
     }

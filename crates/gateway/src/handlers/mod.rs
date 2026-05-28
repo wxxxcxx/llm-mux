@@ -385,7 +385,7 @@ async fn handle_stream_request(
 
     match state.genai.exec_chat_stream(genai::ModelSpec::from_name(&genai_model), chat_req, Some(&opts)).await {
         Ok(stream_resp) => {
-            let stream = genai_stream_to_sse(stream_resp.stream);
+            let stream = genai_stream_to_sse(stream_resp.stream, inbound_protocol);
             Sse::new(stream).into_response()
         }
         Err(e) => {
@@ -397,32 +397,43 @@ async fn handle_stream_request(
 
 fn genai_stream_to_sse(
     mut chat_stream: genai::chat::ChatStream,
+    protocol: Protocol,
 ) -> tokio_stream::wrappers::UnboundedReceiverStream<Result<axum::response::sse::Event, std::convert::Infallible>> {
     use tokio::sync::mpsc;
-    use tokio_stream::StreamExt;
     let (tx, rx) = mpsc::unbounded_channel();
+    use axum::response::sse::Event;
     tokio::spawn(async move {
-        while let Some(event) = StreamExt::next(&mut chat_stream).await {
-            match event {
-                Ok(genai::chat::ChatStreamEvent::Chunk(chunk)) => {
-                    let data = serde_json::json!({
-                        "choices": [{"delta": {"content": &chunk.content}, "index": 0}],
-                        "object": "chat.completion.chunk"
-                    });
-                    let _ = tx.send(Ok(axum::response::sse::Event::default()
-                        .data(serde_json::to_string(&data).unwrap_or_default())));
-                }
-                Ok(genai::chat::ChatStreamEvent::End(_)) => {
-                    let _ = tx.send(Ok(axum::response::sse::Event::default().data("[DONE]")));
-                    break;
-                }
-                Ok(_) => {}
+        let adapter: Box<dyn llm_mux_core::adapter::Adapter> = match protocol {
+            Protocol::OpenAiChat => Box::new(openai_chat_codec::ChatCompletionsCodec),
+            Protocol::Anthropic => Box::new(anthropic_codec::MessagesCodec),
+            Protocol::OpenAiResponses => Box::new(openai_responses_codec::ResponsesCodec),
+        };
+        while let Some(event) = futures::StreamExt::next(&mut chat_stream).await {
+            let evt = match event {
+                Ok(e) => e,
                 Err(e) => {
-                    let _ = tx.send(Ok(axum::response::sse::Event::default()
-                        .data(format!("{{\"error\":\"{}\"}}", e))));
+                    let _ = tx.send(Ok(Event::default().data(format!("{{\"error\":\"{}\"}}", e))));
                     break;
                 }
-            }
+            };
+            let sse_text = match adapter.encode_stream_event(&evt) {
+                Ok(data) => data,
+                Err(_) => continue,
+            };
+            if sse_text.is_empty() { continue; }
+
+            let sse_event = match (protocol, &evt) {
+                (Protocol::Anthropic, genai::chat::ChatStreamEvent::Chunk(_)) =>
+                    Event::default().event("content_block_delta").data(sse_text),
+                (Protocol::Anthropic, genai::chat::ChatStreamEvent::End(_)) =>
+                    Event::default().event("message_stop").data(sse_text),
+                (Protocol::OpenAiResponses, genai::chat::ChatStreamEvent::Chunk(_)) =>
+                    Event::default().event("response.output_text.delta").data(sse_text),
+                (Protocol::OpenAiResponses, genai::chat::ChatStreamEvent::End(_)) =>
+                    Event::default().event("response.completed").data(sse_text),
+                _ => Event::default().data(sse_text),
+            };
+            let _ = tx.send(Ok(sse_event));
         }
     });
     tokio_stream::wrappers::UnboundedReceiverStream::new(rx)

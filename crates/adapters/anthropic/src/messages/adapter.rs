@@ -95,11 +95,11 @@ impl Adapter for MessagesCodec {
 
     fn encode_stream_event(&self, event: &ChatStreamEvent) -> Result<String, AdapterError> {
         match event {
-            ChatStreamEvent::Chunk(c) => Ok(format!(
-                "event: content_block_delta\ndata: {{\"type\":\"content_block_delta\",\"delta\":{{\"type\":\"text_delta\",\"text\":\"{}\"}}}}\n\n",
-                c.content.replace('\\', "\\\\").replace('\"', "\\\"")
-            )),
-            ChatStreamEvent::End(_) => Ok("event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n".into()),
+            ChatStreamEvent::Chunk(c) => Ok(serde_json::json!({
+                "type": "content_block_delta",
+                "delta": {"type": "text_delta", "text": &c.content}
+            }).to_string()),
+            ChatStreamEvent::End(_) => Ok(r#"{"type":"message_stop"}"#.into()),
             _ => Ok(String::new()),
         }
     }
