@@ -162,6 +162,7 @@ fn kill_process(pid: u32, force: bool) -> bool {
 
 #[tokio::main]
 async fn main() {
+    let _ = dotenvy::dotenv();
     let cli = Cli::parse();
 
     match cli.command {
