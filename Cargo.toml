@@ -1,11 +1,11 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/llm-mux-core",
-    "crates/llm-mux-gateway",
-    "crates/llm-mux-codecs/openai-chat",
-    "crates/llm-mux-codecs/anthropic",
-    "crates/llm-mux-codecs/openai-responses",
+    "crates/core",
+    "crates/gateway",
+    "crates/adapters/openai",
+    "crates/adapters/anthropic",
+    "crates/adapters/openai-resp",
 ]
 
 [workspace.package]
@@ -25,12 +25,13 @@ tokio = { version = "1", features = ["full"] }
 clap = { version = "4", features = ["derive", "env"] }
 serde_yaml = "0.9"
 uuid = { version = "1", features = ["v4", "v7"] }
-reqwest = { version = "0.12", features = ["stream", "json"] }
+genai = "0.6"
 
 # internal
-llm-mux-core = { path = "crates/llm-mux-core" }
-openai-chat-codec = { path = "crates/llm-mux-codecs/openai-chat" }
-anthropic-codec = { path = "crates/llm-mux-codecs/anthropic" }
+llm-mux-core = { path = "crates/core" }
+openai-chat-codec = { path = "crates/adapters/openai" }
+anthropic-codec = { path = "crates/adapters/anthropic" }
+openai-responses-codec = { path = "crates/adapters/openai-resp" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
