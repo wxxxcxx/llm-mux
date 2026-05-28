@@ -295,6 +295,14 @@ async fn handle_request(
         kind => format!("{}::{}", kind, route.model),
     };
 
+    debug!(
+        genai_model = %genai_model,
+        msg_count = outbound_ir.messages.len(),
+        has_system = !outbound_ir.system_prompt.is_empty(),
+        max_tokens = outbound_ir.max_tokens,
+        "calling genai"
+    );
+
     match state
         .genai
         .exec_chat(
@@ -305,9 +313,29 @@ async fn handle_request(
         .await
     {
         Ok(genai_resp) => {
-            let ir_resp = ir_from_genai_response(&genai_resp, &outbound_ir.model);
+            let text = genai_resp.first_text().unwrap_or("");
+            debug!(
+                resp_text = %text,
+                usage_prompt = genai_resp.usage.prompt_tokens,
+                usage_completion = genai_resp.usage.completion_tokens,
+                "genai response received"
+            );
+            let ir_resp = ir_from_genai_response(&genai_resp, &ir.model);
             match inbound_codec.encode_response(&ir_resp) {
-                Ok(encoded) => (StatusCode::OK, axum::body::Body::from(encoded)).into_response(),
+                Ok(encoded) => {
+                    debug!(
+                        encoded_len = encoded.len(),
+                        encoded_body = %String::from_utf8_lossy(&encoded),
+                        "response encoded"
+                    );
+                    let mut resp = Response::new(axum::body::Body::from(encoded));
+                    *resp.status_mut() = StatusCode::OK;
+                    resp.headers_mut().insert(
+                        axum::http::header::CONTENT_TYPE,
+                        axum::http::HeaderValue::from_static("application/json"),
+                    );
+                    resp
+                }
                 Err(e) => codec_error_response(inbound_codec, 500, &e),
             }
         }
@@ -408,6 +436,7 @@ fn genai_stream_to_sse(
             Protocol::Anthropic => Box::new(anthropic_codec::MessagesCodec),
             Protocol::OpenAiResponses => Box::new(openai_responses_codec::ResponsesCodec),
         };
+        let mut started = false;
         while let Some(event) = futures::StreamExt::next(&mut chat_stream).await {
             let evt = match event {
                 Ok(e) => e,
@@ -421,6 +450,18 @@ fn genai_stream_to_sse(
                 Err(_) => continue,
             };
             if sse_text.is_empty() { continue; }
+
+            if !started {
+                started = true;
+                if protocol == Protocol::Anthropic {
+                    let _ = tx.send(Ok(Event::default().event("message_start").data(
+                        r#"{"type":"message_start","message":{"id":"msg_0","type":"message","role":"assistant","model":"","content":[],"usage":{"input_tokens":0,"output_tokens":0}}}"#
+                    )));
+                    let _ = tx.send(Ok(Event::default().event("content_block_start").data(
+                        r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#
+                    )));
+                }
+            }
 
             let sse_event = match (protocol, &evt) {
                 (Protocol::Anthropic, genai::chat::ChatStreamEvent::Chunk(_)) =>

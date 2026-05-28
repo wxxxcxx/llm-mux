@@ -259,7 +259,26 @@ async fn main() {
             init_tracing(&log_level);
 
             let cfg = match Config::from_file(&config) {
-                Ok(c) => c,
+                Ok(c) => {
+                    tracing::info!(
+                        providers = c.providers.len(),
+                        routes = c.routes.len(),
+                        "config loaded"
+                    );
+                    // 打印每个 provider 的 api_key 状态
+                    for (name, p) in &c.providers {
+                        let key_len = p.api_key.len();
+                        tracing::debug!(
+                            provider = %name,
+                            format = %p.format,
+                            url = %p.url,
+                            api_key_len = key_len,
+                            api_key_preview = %if key_len > 8 { format!("{}...", &p.api_key[..8]) } else { p.api_key.clone() },
+                            "provider loaded"
+                        );
+                    }
+                    c
+                }
                 Err(e) => {
                     tracing::error!("failed to load config: {}", e);
                     std::process::exit(1);

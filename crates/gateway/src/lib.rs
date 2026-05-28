@@ -10,17 +10,22 @@ pub mod server;
 pub use config::Config;
 pub use server::Server;
 
-use tracing_subscriber::fmt::format::FmtSpan;
+use std::io::IsTerminal;
+
 use tracing_subscriber::EnvFilter;
 
 pub fn init_tracing(log_level: &str) {
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(log_level));
+    let filter = EnvFilter::new(log_level)
+        .add_directive("llm_mux_gateway::handlers=debug".parse().unwrap());
 
-    tracing_subscriber::fmt()
+    let is_tty = std::io::stdout().is_terminal();
+    let subscriber = tracing_subscriber::fmt()
         .with_env_filter(filter)
-        .with_span_events(FmtSpan::NEW | FmtSpan::CLOSE)
-        .json()
-        .with_target(false)
-        .with_current_span(false)
-        .init();
+        .with_target(false);
+
+    if is_tty {
+        subscriber.compact().init();
+    } else {
+        subscriber.json().init();
+    }
 }
