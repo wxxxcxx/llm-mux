@@ -1,9 +1,7 @@
-pub mod adapter;
 pub mod codec;
 pub mod ir;
 pub mod types;
 
-pub use adapter::{Adapter, AdapterError};
 pub use codec::{
     Authenticator, Codec, CodecError, ConfigAuthenticator, ConfigurableRouter, Converter,
     FixedRouter, NoopConverter, ProviderConfig, RouteInfo, RouteResult, RouteRule, Router,

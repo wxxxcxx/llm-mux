@@ -7,9 +7,11 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response, Sse};
 use genai::Client as GenaiClient;
 use llm_mux_core::codec::{Authenticator, Codec, RouteInfo};
-use llm_mux_core::ir::IrRequest;
+use llm_mux_core::ir::{
+    IrRequest, IrStreamEvent, IrUsage, StreamEventType,
+};
 use llm_mux_core::types::{
-    ContentType, Protocol, Role,
+    ContentBlock, ContentType, Protocol, Role, TextContent,
 };
 use llm_mux_core::{ConfigAuthenticator, ConfigurableRouter, Router};
 use tracing::{debug, error, info};
@@ -423,6 +425,61 @@ async fn handle_stream_request(
     }
 }
 
+fn genai_event_to_ir_event(event: &genai::chat::ChatStreamEvent) -> Option<IrStreamEvent> {
+    match event {
+        genai::chat::ChatStreamEvent::Start => Some(IrStreamEvent {
+            event_type: StreamEventType::Start,
+            index: 0,
+            response: None,
+            delta: None,
+            stop_reason: None,
+            usage: None,
+            error: None,
+        }),
+        genai::chat::ChatStreamEvent::Chunk(chunk) => Some(IrStreamEvent {
+            event_type: StreamEventType::Delta,
+            delta: Some(ContentBlock {
+                content_type: ContentType::Text,
+                text: Some(TextContent {
+                    text: chunk.content.clone(),
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }),
+        genai::chat::ChatStreamEvent::ReasoningChunk(chunk) => Some(IrStreamEvent {
+            event_type: StreamEventType::Delta,
+            delta: Some(ContentBlock {
+                content_type: ContentType::Thinking,
+                text: Some(TextContent {
+                    text: chunk.content.clone(),
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }),
+        genai::chat::ChatStreamEvent::End(end) => {
+            let usage = end.captured_usage.as_ref().map(|u| IrUsage {
+                input_tokens: u.prompt_tokens.map(|n| n as i64),
+                output_tokens: u.completion_tokens.map(|n| n as i64),
+                total_tokens: u.total_tokens.map(|n| n as i64),
+                ..Default::default()
+            });
+            let stop_reason = end
+                .captured_stop_reason
+                .as_ref()
+                .map(|r| llm_mux_core::ir::stop_reason_from_genai(r));
+            Some(IrStreamEvent {
+                event_type: StreamEventType::Stop,
+                stop_reason,
+                usage,
+                ..Default::default()
+            })
+        }
+        _ => None,
+    }
+}
+
 fn genai_stream_to_sse(
     mut chat_stream: genai::chat::ChatStream,
     protocol: Protocol,
@@ -431,7 +488,7 @@ fn genai_stream_to_sse(
     let (tx, rx) = mpsc::unbounded_channel();
     use axum::response::sse::Event;
     tokio::spawn(async move {
-        let adapter: Box<dyn llm_mux_core::adapter::Adapter> = match protocol {
+        let codec: Box<dyn Codec> = match protocol {
             Protocol::OpenAiChat => Box::new(openai_chat_codec::ChatCompletionsCodec),
             Protocol::Anthropic => Box::new(anthropic_codec::MessagesCodec),
             Protocol::OpenAiResponses => Box::new(openai_responses_codec::ResponsesCodec),
@@ -445,7 +502,11 @@ fn genai_stream_to_sse(
                     break;
                 }
             };
-            let sse_text = match adapter.encode_stream_event(&evt) {
+            let ir_event = match genai_event_to_ir_event(&evt) {
+                Some(e) => e,
+                None => continue,
+            };
+            let sse_text = match codec.encode_stream_event(&ir_event) {
                 Ok(data) => data,
                 Err(_) => continue,
             };
@@ -463,14 +524,14 @@ fn genai_stream_to_sse(
                 }
             }
 
-            let sse_event = match (protocol, &evt) {
-                (Protocol::Anthropic, genai::chat::ChatStreamEvent::Chunk(_)) =>
+            let sse_event = match (protocol, &ir_event.event_type) {
+                (Protocol::Anthropic, StreamEventType::Delta) =>
                     Event::default().event("content_block_delta").data(sse_text),
-                (Protocol::Anthropic, genai::chat::ChatStreamEvent::End(_)) =>
+                (Protocol::Anthropic, StreamEventType::Stop) =>
                     Event::default().event("message_stop").data(sse_text),
-                (Protocol::OpenAiResponses, genai::chat::ChatStreamEvent::Chunk(_)) =>
+                (Protocol::OpenAiResponses, StreamEventType::Delta) =>
                     Event::default().event("response.output_text.delta").data(sse_text),
-                (Protocol::OpenAiResponses, genai::chat::ChatStreamEvent::End(_)) =>
+                (Protocol::OpenAiResponses, StreamEventType::Stop) =>
                     Event::default().event("response.completed").data(sse_text),
                 _ => Event::default().data(sse_text),
             };

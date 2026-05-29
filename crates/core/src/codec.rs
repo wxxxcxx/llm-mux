@@ -34,6 +34,9 @@ pub trait Codec: Send + Sync {
     /// Encode an IR response back to the external protocol format.
     fn encode_response(&self, response: &IrResponse) -> Result<Vec<u8>, CodecError>;
 
+    /// Encode a single stream event into the external protocol's SSE data line.
+    fn encode_stream_event(&self, event: &IrStreamEvent) -> Result<String, CodecError>;
+
     /// Write an error response in the protocol's native format.
     fn write_error(&self, status_code: u16, message: &str) -> Vec<u8>;
 }

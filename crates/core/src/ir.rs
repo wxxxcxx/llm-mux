@@ -152,9 +152,10 @@ pub struct IrResponse {
 }
 
 /// Identifies the kind of streaming event.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StreamEventType {
+    #[default]
     Start,
     Delta,
     ContentBlockStart,
@@ -177,7 +178,7 @@ pub struct StreamError {
 }
 
 /// A single event in a streaming response.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct IrStreamEvent {
     #[serde(rename = "type")]
     pub event_type: StreamEventType,

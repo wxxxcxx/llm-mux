@@ -1,4 +1,3 @@
-pub mod adapter;
 pub mod convert;
 pub mod encode;
 
@@ -6,7 +5,7 @@ use std::collections::HashMap;
 
 use llm_mux_core::codec::{Codec, CodecError};
 use llm_mux_core::ir::{
-    IrMessage, IrRequest, IrResponse, IrTool,
+    IrMessage, IrRequest, IrResponse, IrStreamEvent, IrTool,
 };
 use llm_mux_core::types::{
     ContentBlock, ContentType, Protocol, Role,
@@ -149,6 +148,27 @@ impl Codec for ChatCompletionsCodec {
 
     fn encode_response(&self, response: &IrResponse) -> Result<Vec<u8>, CodecError> {
         crate::chat::encode::encode_response_impl(response)
+    }
+
+    fn encode_stream_event(&self, event: &IrStreamEvent) -> Result<String, CodecError> {
+        match event.event_type {
+            llm_mux_core::ir::StreamEventType::Delta => {
+                let text = event
+                    .delta
+                    .as_ref()
+                    .filter(|b| b.content_type == ContentType::Text)
+                    .and_then(|b| b.text.as_ref())
+                    .map(|t| t.text.as_str())
+                    .unwrap_or("");
+                Ok(serde_json::json!({
+                    "choices": [{"delta": {"content": text}, "index": 0}],
+                    "object": "chat.completion.chunk"
+                })
+                .to_string())
+            }
+            llm_mux_core::ir::StreamEventType::Stop => Ok("[DONE]".into()),
+            _ => Ok(String::new()),
+        }
     }
 
     fn write_error(&self, status_code: u16, message: &str) -> Vec<u8> {

@@ -1,11 +1,10 @@
-pub mod adapter;
 pub mod convert;
 
 use std::collections::HashMap;
 
 use llm_mux_core::codec::{Codec, CodecError};
 use llm_mux_core::ir::{
-    IrMessage, IrRequest, IrResponse, IrThinkingConfig, IrTool,
+    IrMessage, IrRequest, IrResponse, IrStreamEvent, IrThinkingConfig, IrTool,
 };
 use llm_mux_core::types::{
     ContentBlock as IrBlock, ContentType, Protocol, Role,
@@ -186,6 +185,29 @@ impl Codec for MessagesCodec {
 
         serde_json::to_vec(&resp)
             .map_err(|e| CodecError::Encode(format!("failed to serialize messages response: {e}")))
+    }
+
+    fn encode_stream_event(&self, event: &IrStreamEvent) -> Result<String, CodecError> {
+        match event.event_type {
+            llm_mux_core::ir::StreamEventType::Delta => {
+                let text = event
+                    .delta
+                    .as_ref()
+                    .filter(|b| b.content_type == ContentType::Text)
+                    .and_then(|b| b.text.as_ref())
+                    .map(|t| t.text.as_str())
+                    .unwrap_or("");
+                Ok(serde_json::json!({
+                    "type": "content_block_delta",
+                    "delta": {"type": "text_delta", "text": text}
+                })
+                .to_string())
+            }
+            llm_mux_core::ir::StreamEventType::Stop => {
+                Ok(r#"{"type":"message_stop"}"#.into())
+            }
+            _ => Ok(String::new()),
+        }
     }
 
     fn write_error(&self, status_code: u16, message: &str) -> Vec<u8> {
